@@ -33,32 +33,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(requestLogger);
 app.use(metricsMiddleware);
 
-// Rate limiting
-app.use(rateLimiterMiddleware(config.rateLimit.max, config.rateLimit.windowMs));
-
-// Routes
-app.use('/products', productRoutes);
-app.use('/categories', categoryRoutes);
-app.use('/health', healthRoutes);
-
-// Prometheus metrics endpoint
-app.get('/metrics', async (_req: Request, res: Response) => {
-  res.set('Content-Type', register.contentType);
-  const metrics = await register.metrics();
-  res.send(metrics);
-});
-
-// 404 handler
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({
-    success: false,
-    error: 'Route not found',
-  });
-});
-
-// Error handler (must be last)
-app.use(errorHandler);
-
 // Start server
 const startServer = async () => {
   try {
@@ -76,6 +50,32 @@ const startServer = async () => {
     // Connect to Redis
     await connectRedis();
     logger.info('Connected to Redis');
+
+    // Rate limiting (after Redis is connected)
+    app.use(rateLimiterMiddleware(config.rateLimit.max, config.rateLimit.windowMs));
+
+    // Routes
+    app.use('/products', productRoutes);
+    app.use('/categories', categoryRoutes);
+    app.use('/health', healthRoutes);
+
+    // Prometheus metrics endpoint
+    app.get('/metrics', async (_req: Request, res: Response) => {
+      res.set('Content-Type', register.contentType);
+      const metrics = await register.metrics();
+      res.send(metrics);
+    });
+
+    // 404 handler
+    app.use((_req: Request, res: Response) => {
+      res.status(404).json({
+        success: false,
+        error: 'Route not found',
+      });
+    });
+
+    // Error handler (must be last)
+    app.use(errorHandler);
 
     // Start listening
     app.listen(config.port, () => {
