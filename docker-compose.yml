@@ -1,5 +1,7 @@
+version: '3.8'
+
 services:
-  # PostgreSQL - User Service Database
+  # PostgreSQL for User Service
   postgres-user:
     image: postgres:15-alpine
     container_name: ecommerce-postgres-user
@@ -11,16 +13,15 @@ services:
       - "5432:5432"
     volumes:
       - postgres-user-data:/var/lib/postgresql/data
-      - ./services/user-service/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - ecommerce-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d user_db"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - ecommerce-network
 
-  # PostgreSQL - Order Service Database
+  # PostgreSQL for Order Service
   postgres-order:
     image: postgres:15-alpine
     container_name: ecommerce-postgres-order
@@ -32,17 +33,17 @@ services:
       - "5433:5432"
     volumes:
       - postgres-order-data:/var/lib/postgresql/data
+    networks:
+      - ecommerce-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d order_db"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - ecommerce-network
 
-  # MongoDB - Product Catalog
+  # MongoDB for Product Catalog
   mongodb:
-    image: mongo:7-jammy
+    image: mongo:7
     container_name: ecommerce-mongodb
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
@@ -52,15 +53,15 @@ services:
       - "27017:27017"
     volumes:
       - mongodb-data:/data/db
+    networks:
+      - ecommerce-network
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - ecommerce-network
 
-  # Redis - Cache & Sessions
+  # Redis for caching and sessions
   redis:
     image: redis:7-alpine
     container_name: ecommerce-redis
@@ -69,54 +70,83 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    networks:
+      - ecommerce-network
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - ecommerce-network
 
-  # Elasticsearch - Product Search
+  # Elasticsearch for product search
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     container_name: ecommerce-elasticsearch
     environment:
       - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
       - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
     ports:
       - "9200:9200"
-      - "9300:9300"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - ecommerce-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      test: curl -s http://localhost:9200 >/dev/null || exit 1
       interval: 30s
       timeout: 10s
       retries: 5
-    networks:
-      - ecommerce-network
 
-  # RabbitMQ - Message Queue
+  # RabbitMQ for message queue
   rabbitmq:
-    image: rabbitmq:3.12-management-alpine
+    image: rabbitmq:3-management-alpine
     container_name: ecommerce-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: password123
     ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # Management UI
+      - "5672:5672"
+      - "15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - ecommerce-network
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      test: rabbitmq-diagnostics -q ping
       interval: 30s
       timeout: 10s
       retries: 5
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ecommerce-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
     networks:
       - ecommerce-network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ecommerce-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - ecommerce-network
+    depends_on:
+      - prometheus
 
   # User Service
   user-service:
@@ -135,25 +165,19 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: password123
-      JWT_ACCESS_SECRET: dev-access-secret-change-in-production
-      JWT_REFRESH_SECRET: dev-refresh-secret-change-in-production
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      JWT_EXPIRES_IN: 24h
+      REFRESH_TOKEN_EXPIRES_IN: 7d
       CORS_ORIGINS: http://localhost:3000
     ports:
       - "8001:8001"
+    networks:
+      - ecommerce-network
     depends_on:
       postgres-user:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - ecommerce-network
-    restart: unless-stopped
 
   # Product Catalog Service
   product-catalog-service:
@@ -173,6 +197,8 @@ services:
       CORS_ORIGINS: http://localhost:3000
     ports:
       - "8002:8002"
+    networks:
+      - ecommerce-network
     depends_on:
       mongodb:
         condition: service_healthy
@@ -180,46 +206,42 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - ecommerce-network
-    restart: unless-stopped
 
-  # Prometheus - Metrics
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: ecommerce-prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    networks:
-      - ecommerce-network
-
-  # Grafana - Visualization
-  grafana:
-    image: grafana/grafana:latest
-    container_name: ecommerce-grafana
+  # Order Service
+  order-service:
+    build:
+      context: ./services/order-service
+      dockerfile: Dockerfile
+    container_name: ecommerce-order-service
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin123
+      NODE_ENV: development
+      PORT: 8003
+      DB_HOST: postgres-order
+      DB_PORT: 5432
+      DB_NAME: order_db
+      DB_USER: admin
+      DB_PASSWORD: password123
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: password123
+      REDIS_DB: 2
+      RABBITMQ_URL: amqp://admin:password123@rabbitmq:5672
+      USER_SERVICE_URL: http://user-service:8001
+      PRODUCT_SERVICE_URL: http://product-catalog-service:8002
+      CORS_ORIGINS: http://localhost:3000
     ports:
-      - "3001:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-    depends_on:
-      - prometheus
+      - "8003:8003"
     networks:
       - ecommerce-network
+    depends_on:
+      postgres-order:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      product-catalog-service:
+        condition: service_started
 
 volumes:
   postgres-user-data:
