@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import { ProductService } from '../services/product.service';
-import { logger } from '../utils/logger';
 import {
   validateCreateProduct,
   validateUpdateProduct,
@@ -344,7 +343,7 @@ export class ProductController {
   /**
    * Get low stock products
    */
-  async getLowStockProducts(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getLowStockProducts(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const products = await productService.getLowStockProducts();
 

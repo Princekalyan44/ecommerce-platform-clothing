@@ -206,9 +206,10 @@ export class SearchService {
         },
       });
 
-      const suggestions = result.suggest?.product_suggest[0]?.options?.map(
-        (option: any) => option.text
-      ) || [];
+      const options = result.suggest?.product_suggest[0]?.options;
+      const suggestions = Array.isArray(options)
+        ? options.map((option: any) => option.text)
+        : [];
 
       return suggestions;
     } catch (error) {

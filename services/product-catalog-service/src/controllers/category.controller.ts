@@ -160,7 +160,7 @@ export class CategoryController {
   /**
    * List all categories
    */
-  async listAllCategories(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listAllCategories(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const categories = await categoryService.listAllCategories();
 
@@ -176,7 +176,7 @@ export class CategoryController {
   /**
    * Get top-level categories
    */
-  async getTopLevelCategories(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getTopLevelCategories(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const categories = await categoryService.getTopLevelCategories();
 
