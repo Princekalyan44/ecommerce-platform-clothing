@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: services
+  labels:
+    app: user-service
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: user-service-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: user-service
+        image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/user-service:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8001
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "8001"
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: user-db-credentials
+              key: host
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: user-db-credentials
+              key: port
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: user-db-credentials
+              key: database
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: user-db-credentials
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: user-db-credentials
+              key: password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: redis-config
+              key: host
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: redis-config
+              key: port
+        - name: JWT_ACCESS_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: jwt-secrets
+              key: access-secret
+        - name: JWT_REFRESH_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: jwt-secrets
+              key: refresh-secret
+        - name: GOOGLE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: oauth-google
+              key: client-id
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth-google
+              key: client-secret
+        - name: FACEBOOK_APP_ID
+          valueFrom:
+            secretKeyRef:
+              name: oauth-facebook
+              key: app-id
+        - name: FACEBOOK_APP_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth-facebook
+              key: app-secret
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /app/logs
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
