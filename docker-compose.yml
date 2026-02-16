@@ -98,9 +98,9 @@ services:
       timeout: 10s
       retries: 5
 
-  # RabbitMQ for message queue
+  # RabbitMQ for message queue (using stable 3.12 version)
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    image: rabbitmq:3.12-management-alpine
     container_name: ecommerce-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: admin
