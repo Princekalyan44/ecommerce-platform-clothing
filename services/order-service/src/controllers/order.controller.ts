@@ -6,7 +6,6 @@ import {
   validateUpdatePaymentStatus,
   validateOrderSearch,
 } from '../validators/order.validator';
-import { logger } from '../utils/logger';
 
 const orderService = new OrderService();
 

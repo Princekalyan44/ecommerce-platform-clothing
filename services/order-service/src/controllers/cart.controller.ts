@@ -5,7 +5,6 @@ import {
   validateUpdateCartItem,
   validateRemoveFromCart,
 } from '../validators/cart.validator';
-import { logger } from '../utils/logger';
 
 const cartService = new CartService();
 
