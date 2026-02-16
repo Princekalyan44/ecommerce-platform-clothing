@@ -1,13 +1,16 @@
-import * as amqp from 'amqplib';
+import amqplib from 'amqplib';
 import { config } from '../config';
 import { logger } from './logger';
 
-let connection: amqp.Connection;
-let channel: amqp.Channel;
+type Connection = amqplib.Connection;
+type Channel = amqplib.Channel;
+
+let connection: Connection;
+let channel: Channel;
 
 export const connectRabbitMQ = async (): Promise<void> => {
   try {
-    connection = await amqp.connect(config.rabbitmq.url);
+    connection = await amqplib.connect(config.rabbitmq.url);
     channel = await connection.createChannel();
     
     // Declare exchanges
@@ -46,7 +49,7 @@ export const publishEvent = async (exchange: string, routingKey: string, message
   }
 };
 
-export const getChannel = (): amqp.Channel => {
+export const getChannel = (): Channel => {
   if (!channel) {
     throw new Error('RabbitMQ channel not initialized');
   }
