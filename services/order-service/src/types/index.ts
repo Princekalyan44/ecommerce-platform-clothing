@@ -1,5 +1,4 @@
 import { OrderStatus, PaymentStatus } from '../models/Order';
-import { CartItemAttributes } from '../models/Cart';
 
 export interface AddressInput {
   fullName: string;

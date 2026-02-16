@@ -11,7 +11,7 @@ import {
   OrderSearchQuery,
 } from '../types';
 import { logger } from '../utils/logger';
-import { recordOrderOperation, updateActiveOrders } from '../utils/metrics';
+import { recordOrderOperation } from '../utils/metrics';
 import { generateOrderNumber } from '../utils/order-number';
 import { publishEvent } from '../utils/rabbitmq';
 

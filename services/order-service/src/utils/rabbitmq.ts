@@ -2,8 +2,8 @@ import amqp, { Channel, Connection } from 'amqplib';
 import { config } from '../config';
 import { logger } from './logger';
 
-let connection: Connection;
-let channel: Channel;
+let connection: Connection | null = null;
+let channel: Channel | null = null;
 
 export const connectRabbitMQ = async (): Promise<void> => {
   try {

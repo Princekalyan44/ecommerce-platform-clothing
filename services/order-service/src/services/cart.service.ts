@@ -46,7 +46,7 @@ export class CartService {
 
       // Get current cart
       const cart = await cartRepository.findOrCreate(userId);
-      const items = [...cart.items];
+      const items: CartItemAttributes[] = [...cart.items];
 
       // Find if item already exists
       const existingIndex = items.findIndex(
