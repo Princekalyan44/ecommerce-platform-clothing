@@ -1,4 +1,4 @@
-import amqp from 'amqplib';
+import * as amqp from 'amqplib';
 import { config } from '../config';
 import { logger } from './logger';
 
