@@ -7,8 +7,12 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies
-RUN npm ci --only=production && \
+# Install dependencies (use npm install if package-lock doesn't exist)
+RUN if [ -f package-lock.json ]; then \
+      npm ci --only=production; \
+    else \
+      npm install --production; \
+    fi && \
     npm cache clean --force
 
 # Copy source code
