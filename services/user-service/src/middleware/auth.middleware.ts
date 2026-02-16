@@ -23,7 +23,7 @@ export const authenticateToken = (
       return;
     }
 
-    const decoded = jwt.verify(token, config.jwt.accessSecret) as TokenPayload;
+    const decoded = jwt.verify(token, config.jwt.accessTokenSecret) as TokenPayload;
     (req as any).user = decoded;
     next();
   } catch (error: any) {

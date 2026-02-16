@@ -15,9 +15,9 @@ export class TokenService {
       role: user.role,
     };
 
-    return jwt.sign(payload, config.jwt.accessSecret, {
-      expiresIn: config.jwt.accessExpiry,
-    });
+    return jwt.sign(payload, config.jwt.accessTokenSecret, {
+      expiresIn: config.jwt.accessTokenExpiry,
+    } as jwt.SignOptions);
   }
 
   /**
@@ -33,9 +33,9 @@ export class TokenService {
       token_family: tokenFamily,
     };
 
-    const token = jwt.sign(payload, config.jwt.refreshSecret, {
-      expiresIn: config.jwt.refreshExpiry,
-    });
+    const token = jwt.sign(payload, config.jwt.refreshTokenSecret, {
+      expiresIn: config.jwt.refreshTokenExpiry,
+    } as jwt.SignOptions);
 
     // Store token metadata in Redis
     await redisClient.setEx(
@@ -58,7 +58,7 @@ export class TokenService {
     // Verify refresh token
     const decoded = jwt.verify(
       refreshToken,
-      config.jwt.refreshSecret
+      config.jwt.refreshTokenSecret
     ) as RefreshTokenPayload;
 
     // Check if token is revoked
@@ -94,7 +94,7 @@ export class TokenService {
     try {
       const decoded = jwt.verify(
         refreshToken,
-        config.jwt.refreshSecret
+        config.jwt.refreshTokenSecret
       ) as RefreshTokenPayload;
 
       await redisClient.del(`refresh_token:${decoded.token_id}`);
