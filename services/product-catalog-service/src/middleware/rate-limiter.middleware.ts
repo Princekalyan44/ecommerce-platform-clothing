@@ -5,8 +5,8 @@ import { redisClient } from '../utils/redis';
 export const rateLimiterMiddleware = (max: number = 1000, windowMs: number = 3600000) => {
   return rateLimit({
     store: new RedisStore({
-      // @ts-ignore - Redis client compatibility
-      client: redisClient,
+      // @ts-ignore - Redis v4 client compatibility
+      sendCommand: (...args: string[]) => redisClient.sendCommand(args),
       prefix: 'rate_limit:',
     }),
     windowMs,
