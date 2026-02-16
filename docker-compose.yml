@@ -157,6 +157,41 @@ services:
       - ecommerce-network
     restart: unless-stopped
 
+  # Product Catalog Service
+  product-catalog-service:
+    build:
+      context: ./services/product-catalog-service
+      dockerfile: Dockerfile
+    container_name: ecommerce-product-catalog-service
+    environment:
+      NODE_ENV: development
+      PORT: 8002
+      MONGODB_URI: mongodb://admin:password123@mongodb:27017/product_catalog?authSource=admin
+      ELASTICSEARCH_NODE: http://elasticsearch:9200
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: password123
+      REDIS_DB: 1
+      CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8002:8002"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
   # Prometheus - Metrics
   prometheus:
     image: prom/prometheus:latest
