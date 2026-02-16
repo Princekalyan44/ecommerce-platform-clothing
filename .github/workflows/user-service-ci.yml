@@ -1,0 +1,335 @@
+name: User Service - CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'services/user-service/**'
+      - '.github/workflows/user-service-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'services/user-service/**'
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: user-service
+  SERVICE_NAME: user-service
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: user_db_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: services/user-service/package-lock.json
+
+    - name: Install dependencies
+      working-directory: services/user-service
+      run: npm ci
+
+    - name: Run database migrations
+      working-directory: services/user-service
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: user_db_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+      run: npm run migrate
+
+    - name: Run linter
+      working-directory: services/user-service
+      run: npm run lint
+
+    - name: Run tests
+      working-directory: services/user-service
+      env:
+        NODE_ENV: test
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: user_db_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+        JWT_ACCESS_SECRET: test-access-secret
+        JWT_REFRESH_SECRET: test-refresh-secret
+      run: npm test -- --coverage
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./services/user-service/coverage/lcov.info
+        flags: user-service
+        name: user-service-coverage
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner (code)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: 'services/user-service'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+
+    - name: Upload Trivy results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run Snyk dependency scan
+      uses: snyk/actions/node@master
+      continue-on-error: true
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --file=services/user-service/package.json --severity-threshold=high
+
+    - name: Setup Node.js for SonarQube
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install dependencies
+      working-directory: services/user-service
+      run: npm ci
+
+    - name: SonarQube Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      with:
+        projectBaseDir: services/user-service
+        args: >
+          -Dsonar.projectKey=ecommerce-user-service
+          -Dsonar.organization=your-org
+          -Dsonar.sources=src
+          -Dsonar.tests=src
+          -Dsonar.test.inclusions=**/*.test.ts
+          -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Extract metadata for Docker
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+        tags: |
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
+          type=semver,pattern={{version}}
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build Docker image
+      working-directory: services/user-service
+      run: |
+        docker build -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} .
+
+    - name: Scan Docker image with Trivy
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        format: 'sarif'
+        output: 'trivy-image-results.sarif'
+        severity: 'CRITICAL,HIGH'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-image-results.sarif'
+
+    - name: Tag and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+        docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+        docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+        docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: development
+      url: https://dev-api.yourstore.com/user-service/health
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name ecommerce-dev-cluster --region ${{ env.AWS_REGION }}
+
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl set image deployment/${{ env.SERVICE_NAME }} \
+          ${{ env.SERVICE_NAME }}=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
+          -n services
+        kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n services --timeout=5m
+
+    - name: Run smoke tests
+      run: |
+        sleep 30
+        HEALTH_URL=$(kubectl get svc ${{ env.SERVICE_NAME }} -n services -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        curl -f http://$HEALTH_URL:8001/health || exit 1
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://api.yourstore.com/user-service/health
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name ecommerce-prod-cluster --region ${{ env.AWS_REGION }}
+
+    - name: Deploy to Kubernetes (Blue-Green)
+      run: |
+        # Update deployment with new image
+        kubectl set image deployment/${{ env.SERVICE_NAME }} \
+          ${{ env.SERVICE_NAME }}=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
+          -n services
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n services --timeout=10m
+
+    - name: Run production smoke tests
+      run: |
+        sleep 60
+        HEALTH_URL=$(kubectl get svc ${{ env.SERVICE_NAME }} -n services -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        
+        # Health check
+        curl -f http://$HEALTH_URL:8001/health || exit 1
+        
+        # Metrics check
+        curl -f http://$HEALTH_URL:8001/metrics || exit 1
+
+    - name: Notify Slack on success
+      if: success()
+      uses: slackapi/slack-github-action@v1
+      with:
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
+          {
+            "text": "✅ User Service deployed to production successfully!",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*User Service Deployment* \n✅ Successfully deployed to production\n*Commit:* ${{ github.sha }}\n*Author:* ${{ github.actor }}"
+                }
+              }
+            ]
+          }
+
+    - name: Notify Slack on failure
+      if: failure()
+      uses: slackapi/slack-github-action@v1
+      with:
+        webhook: ${{ secrets.SLACK_WEBHOOK }}
+        payload: |
+          {
+            "text": "❌ User Service deployment to production failed!",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*User Service Deployment* \n❌ Deployment failed\n*Commit:* ${{ github.sha }}\n*Author:* ${{ github.actor }}\n*Workflow:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                }
+              }
+            ]
+          }
