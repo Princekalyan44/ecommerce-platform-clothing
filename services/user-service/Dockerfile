@@ -7,13 +7,12 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies (use npm install if package-lock doesn't exist)
+# Install ALL dependencies (including dev dependencies needed for build)
 RUN if [ -f package-lock.json ]; then \
-      npm ci --only=production; \
+      npm ci; \
     else \
-      npm install --production; \
-    fi && \
-    npm cache clean --force
+      npm install; \
+    fi
 
 # Copy source code
 COPY src ./src
@@ -22,18 +21,27 @@ COPY src ./src
 RUN npm run build
 
 # Production stage
-FROM node:18-alpine
+FROM node:18-alpine AS production
 
 WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install ONLY production dependencies
+RUN if [ -f package-lock.json ]; then \
+      npm ci --omit=dev; \
+    else \
+      npm install --production; \
+    fi && \
+    npm cache clean --force
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
-# Copy package files and built code
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
+# Copy built code from builder stage
+COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
 
 # Set ownership
 RUN chown -R nodejs:nodejs /app
