@@ -4,7 +4,7 @@ import { redisClient } from '../utils/redis';
 
 const router = Router();
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (_req: Request, res: Response) => {
   const health = {
     status: 'healthy',
     timestamp: new Date().toISOString(),

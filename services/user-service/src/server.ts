@@ -1,57 +1,57 @@
-import express, { Application } from 'express';
-import helmet from 'helmet';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { config } from './config';
+import { connectDatabase } from './database/connection';
+import { connectRedis } from './utils/redis';
 import { logger } from './utils/logger';
+import { errorHandler } from './middleware/error.middleware';
+import { requestLogger } from './middleware/request-logger.middleware';
+import { metricsMiddleware, register } from './utils/metrics';
 import { authRoutes } from './routes/auth.routes';
 import { userRoutes } from './routes/user.routes';
 import { healthRoutes } from './routes/health.routes';
-import { errorHandler } from './middleware/error.middleware';
-import { requestLogger } from './middleware/request-logger.middleware';
-import { metricsMiddleware, register as metricsRegister } from './utils/metrics';
-import { connectDatabase } from './database/connection';
-import { connectRedis } from './utils/redis';
 
-const app: Application = express();
+const app = express();
 
 // Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-    },
-  },
-}));
+app.use(helmet());
+app.use(
+  cors({
+    origin: config.corsOrigins,
+    credentials: true,
+  })
+);
 
-// CORS
-app.use(cors({
-  origin: config.corsOrigins,
-  credentials: true,
-}));
-
-// Body parsing
+// Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging
+// Logging and metrics
 app.use(requestLogger);
-
-// Metrics
 app.use(metricsMiddleware);
 
 // Routes
-app.use('/health', healthRoutes);
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
+app.use('/health', healthRoutes);
 
-// Metrics endpoint
-app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', metricsRegister.contentType);
-  res.end(await metricsRegister.metrics());
+// Prometheus metrics endpoint
+app.get('/metrics', async (_req: Request, res: Response) => {
+  res.set('Content-Type', register.contentType);
+  const metrics = await register.metrics();
+  res.send(metrics);
 });
 
-// Error handling
+// 404 handler
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    error: 'Route not found',
+  });
+});
+
+// Error handler (must be last)
 app.use(errorHandler);
 
 // Start server
@@ -59,36 +59,23 @@ const startServer = async () => {
   try {
     // Connect to database
     await connectDatabase();
-    logger.info('✅ Database connected');
+    logger.info('Connected to PostgreSQL');
 
     // Connect to Redis
     await connectRedis();
-    logger.info('✅ Redis connected');
+    logger.info('Connected to Redis');
 
     // Start listening
-    const PORT = config.port;
-    app.listen(PORT, () => {
-      logger.info(`🚀 User Service running on port ${PORT}`);
-      logger.info(`📊 Metrics available at http://localhost:${PORT}/metrics`);
-      logger.info(`❤️  Health check at http://localhost:${PORT}/health`);
+    app.listen(config.port, () => {
+      logger.info(`User Service listening on port ${config.port}`);
+      logger.info(`Environment: ${config.nodeEnv}`);
     });
   } catch (error) {
-    logger.error('Failed to start server:', error);
+    logger.error('Failed to start server', { error });
     process.exit(1);
   }
 };
 
-// Handle shutdown gracefully
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  process.exit(0);
-});
-
 startServer();
 
-export { app };
+export default app;

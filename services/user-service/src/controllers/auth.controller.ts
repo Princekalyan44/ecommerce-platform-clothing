@@ -1,10 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/auth.service';
 import { logger } from '../utils/logger';
-import { RegisterInput, LoginInput } from '../types';
 import { validateRegister, validateLogin } from '../validators/auth.validator';
+import { recordAuthEvent } from '../utils/metrics';
 import xss from 'xss';
-import validator from 'validator';
 
 const authService = new AuthService();
 
@@ -12,20 +11,21 @@ export class AuthController {
   /**
    * Register new user
    */
-  async register(req: Request, res: Response, next: NextFunction) {
+  async register(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       // Validate input
       const { error, value } = validateRegister(req.body);
       if (error) {
-        return res.status(400).json({
+        res.status(400).json({
           success: false,
           error: error.details[0].message,
         });
+        return;
       }
 
       // Sanitize inputs
-      const sanitizedInput: RegisterInput = {
-        email: validator.normalizeEmail(value.email) || value.email,
+      const sanitizedInput = {
+        email: xss(value.email.toLowerCase()),
         password: value.password,
         first_name: xss(value.first_name),
         last_name: xss(value.last_name),
@@ -34,27 +34,22 @@ export class AuthController {
       // Register user
       const result = await authService.register(sanitizedInput);
 
-      // Log registration
-      logger.info('User registered successfully', {
-        user_id: result.user.id,
-        email: result.user.email,
-        method: 'email',
-      });
+      recordAuthEvent('register', 'success');
+      logger.info('User registered successfully', { email: sanitizedInput.email });
 
       res.status(201).json({
         success: true,
         data: result,
       });
     } catch (error: any) {
-      logger.error('Registration failed', { error: error.message });
-      
       if (error.message === 'User already exists') {
-        return res.status(409).json({
+        recordAuthEvent('register', 'failure');
+        res.status(409).json({
           success: false,
           error: 'User with this email already exists',
         });
+        return;
       }
-
       next(error);
     }
   }
@@ -62,46 +57,42 @@ export class AuthController {
   /**
    * Login user
    */
-  async login(req: Request, res: Response, next: NextFunction) {
+  async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       // Validate input
       const { error, value } = validateLogin(req.body);
       if (error) {
-        return res.status(400).json({
+        res.status(400).json({
           success: false,
           error: error.details[0].message,
         });
+        return;
       }
 
-      // Sanitize email
-      const sanitizedInput: LoginInput = {
-        email: validator.normalizeEmail(value.email) || value.email,
+      const sanitizedInput = {
+        email: xss(value.email.toLowerCase()),
         password: value.password,
       };
 
       // Login
       const result = await authService.login(sanitizedInput);
 
-      // Log login
-      logger.info('User logged in successfully', {
-        user_id: result.user.id,
-        email: result.user.email,
-      });
+      recordAuthEvent('login', 'success');
+      logger.info('User logged in successfully', { email: sanitizedInput.email });
 
       res.status(200).json({
         success: true,
         data: result,
       });
     } catch (error: any) {
-      logger.error('Login failed', { error: error.message });
-
+      recordAuthEvent('login', 'failure');
       if (error.message === 'Invalid credentials') {
-        return res.status(401).json({
+        res.status(401).json({
           success: false,
           error: 'Invalid email or password',
         });
+        return;
       }
-
       next(error);
     }
   }
@@ -109,33 +100,35 @@ export class AuthController {
   /**
    * Refresh access token
    */
-  async refresh(req: Request, res: Response, next: NextFunction) {
+  async refresh(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { refresh_token } = req.body;
 
       if (!refresh_token) {
-        return res.status(400).json({
+        res.status(400).json({
           success: false,
           error: 'Refresh token is required',
         });
+        return;
       }
 
-      const result = await authService.refreshToken(refresh_token);
+      const result = await authService.refreshTokens(refresh_token);
 
       res.status(200).json({
         success: true,
         data: result,
       });
     } catch (error: any) {
-      logger.error('Token refresh failed', { error: error.message });
-
-      if (error.message.includes('Invalid') || error.message.includes('expired')) {
-        return res.status(401).json({
+      if (
+        error.message === 'Invalid refresh token' ||
+        error.message === 'Token has been revoked'
+      ) {
+        res.status(401).json({
           success: false,
-          error: 'Invalid or expired refresh token',
+          error: error.message,
         });
+        return;
       }
-
       next(error);
     }
   }
@@ -143,22 +136,34 @@ export class AuthController {
   /**
    * Logout user
    */
-  async logout(req: Request, res: Response, next: NextFunction) {
+  async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { refresh_token } = req.body;
-      const userId = (req as any).user?.user_id;
 
-      if (refresh_token) {
-        await authService.revokeRefreshToken(refresh_token);
+      if (!refresh_token) {
+        res.status(400).json({
+          success: false,
+          error: 'Refresh token is required',
+        });
+        return;
       }
 
-      logger.info('User logged out', { user_id: userId });
+      await authService.logout(refresh_token);
+
+      logger.info('User logged out successfully');
 
       res.status(200).json({
         success: true,
         message: 'Logged out successfully',
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error.message === 'Invalid refresh token') {
+        res.status(401).json({
+          success: false,
+          error: 'Invalid refresh token',
+        });
+        return;
+      }
       next(error);
     }
   }
@@ -166,31 +171,21 @@ export class AuthController {
   /**
    * Google OAuth callback
    */
-  async googleCallback(req: Request, res: Response, next: NextFunction) {
+  async googleCallback(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const user = (req as any).user;
-      
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          error: 'Authentication failed',
-        });
-      }
+      const oauthUser = req.user as any;
 
-      const result = await authService.handleOAuthLogin(user, 'google');
+      const result = await authService.oauthLogin('google', oauthUser);
 
-      logger.info('Google OAuth login successful', {
-        user_id: result.user.id,
-        email: result.user.email,
-      });
+      recordAuthEvent('oauth_google', 'success');
+      logger.info('User logged in via Google OAuth', { email: oauthUser.email });
 
       // Redirect to frontend with tokens
-      const redirectUrl = `${process.env.FRONTEND_URL}/auth/callback?` +
-        `access_token=${result.tokens.access_token}&` +
-        `refresh_token=${result.tokens.refresh_token}`;
-
-      res.redirect(redirectUrl);
+      res.redirect(
+        `${process.env.FRONTEND_URL}/auth/callback?access_token=${result.tokens.access_token}&refresh_token=${result.tokens.refresh_token}`
+      );
     } catch (error) {
+      recordAuthEvent('oauth_google', 'failure');
       next(error);
     }
   }
@@ -198,31 +193,21 @@ export class AuthController {
   /**
    * Facebook OAuth callback
    */
-  async facebookCallback(req: Request, res: Response, next: NextFunction) {
+  async facebookCallback(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const user = (req as any).user;
-      
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          error: 'Authentication failed',
-        });
-      }
+      const oauthUser = req.user as any;
 
-      const result = await authService.handleOAuthLogin(user, 'facebook');
+      const result = await authService.oauthLogin('facebook', oauthUser);
 
-      logger.info('Facebook OAuth login successful', {
-        user_id: result.user.id,
-        email: result.user.email,
-      });
+      recordAuthEvent('oauth_facebook', 'success');
+      logger.info('User logged in via Facebook OAuth', { email: oauthUser.email });
 
       // Redirect to frontend with tokens
-      const redirectUrl = `${process.env.FRONTEND_URL}/auth/callback?` +
-        `access_token=${result.tokens.access_token}&` +
-        `refresh_token=${result.tokens.refresh_token}`;
-
-      res.redirect(redirectUrl);
+      res.redirect(
+        `${process.env.FRONTEND_URL}/auth/callback?access_token=${result.tokens.access_token}&refresh_token=${result.tokens.refresh_token}`
+      );
     } catch (error) {
+      recordAuthEvent('oauth_facebook', 'failure');
       next(error);
     }
   }

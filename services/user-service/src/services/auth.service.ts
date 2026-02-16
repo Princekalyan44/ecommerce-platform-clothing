@@ -3,8 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { UserRepository } from '../repositories/user.repository';
 import { TokenService } from './token.service';
 import { config } from '../config';
-import { RegisterInput, LoginInput, User, AuthResponse, OAuthUser } from '../types';
-import { logger } from '../utils/logger';
+import { RegisterInput, LoginInput, AuthResponse, OAuthUser } from '../types';
 
 const userRepository = new UserRepository();
 const tokenService = new TokenService();
@@ -14,7 +13,7 @@ export class AuthService {
    * Register new user
    */
   async register(input: RegisterInput): Promise<AuthResponse> {
-    // Check if user exists
+    // Check if user already exists
     const existingUser = await userRepository.findByEmail(input.email);
     if (existingUser) {
       throw new Error('User already exists');
@@ -24,9 +23,8 @@ export class AuthService {
     const hashedPassword = await bcrypt.hash(input.password, config.bcryptRounds);
 
     // Create user
-    const userId = uuidv4();
     const user = await userRepository.create({
-      id: userId,
+      id: uuidv4(),
       email: input.email,
       password: hashedPassword,
       first_name: input.first_name,
@@ -38,10 +36,8 @@ export class AuthService {
     });
 
     // Generate tokens
-    const tokens = await tokenService.generateTokenPair(user);
-
-    // Store refresh token
-    await tokenService.storeRefreshToken(user.id, tokens.refresh_token);
+    const accessToken = await tokenService.generateAccessToken(user);
+    const refreshToken = await tokenService.generateRefreshToken(user);
 
     return {
       user: {
@@ -52,7 +48,11 @@ export class AuthService {
         role: user.role,
         is_email_verified: user.is_email_verified,
       },
-      tokens,
+      tokens: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 900, // 15 minutes
+      },
     };
   }
 
@@ -62,17 +62,12 @@ export class AuthService {
   async login(input: LoginInput): Promise<AuthResponse> {
     // Find user
     const user = await userRepository.findByEmail(input.email);
-    if (!user) {
+    if (!user || !user.password) {
       throw new Error('Invalid credentials');
     }
 
-    // Check if OAuth user
-    if (user.oauth_provider) {
-      throw new Error(`Please login with ${user.oauth_provider}`);
-    }
-
     // Verify password
-    const isPasswordValid = await bcrypt.compare(input.password, user.password!);
+    const isPasswordValid = await bcrypt.compare(input.password, user.password);
     if (!isPasswordValid) {
       throw new Error('Invalid credentials');
     }
@@ -81,10 +76,8 @@ export class AuthService {
     await userRepository.updateLastLogin(user.id);
 
     // Generate tokens
-    const tokens = await tokenService.generateTokenPair(user);
-
-    // Store refresh token
-    await tokenService.storeRefreshToken(user.id, tokens.refresh_token);
+    const accessToken = await tokenService.generateAccessToken(user);
+    const refreshToken = await tokenService.generateRefreshToken(user);
 
     return {
       user: {
@@ -95,70 +88,56 @@ export class AuthService {
         role: user.role,
         is_email_verified: user.is_email_verified,
       },
-      tokens,
+      tokens: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 900,
+      },
     };
   }
 
   /**
-   * Refresh access token
+   * Refresh tokens
    */
-  async refreshToken(refreshToken: string): Promise<{ access_token: string; expires_in: number }> {
-    // Verify refresh token
-    const payload = await tokenService.verifyRefreshToken(refreshToken);
-
-    // Check if token is revoked
-    const isRevoked = await tokenService.isRefreshTokenRevoked(refreshToken);
-    if (isRevoked) {
-      throw new Error('Refresh token has been revoked');
-    }
-
-    // Get user
-    const user = await userRepository.findById(payload.user_id);
-    if (!user) {
-      throw new Error('User not found');
-    }
-
-    // Generate new access token
-    const accessToken = await tokenService.generateAccessToken(user);
-
+  async refreshTokens(refreshToken: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+    const tokens = await tokenService.refreshAccessToken(refreshToken);
     return {
-      access_token: accessToken,
-      expires_in: 900, // 15 minutes
+      ...tokens,
+      expires_in: 900,
     };
   }
 
   /**
-   * Revoke refresh token (logout)
+   * Logout user
    */
-  async revokeRefreshToken(refreshToken: string): Promise<void> {
+  async logout(refreshToken: string): Promise<void> {
     await tokenService.revokeRefreshToken(refreshToken);
   }
 
   /**
-   * Handle OAuth login (Google/Facebook)
+   * OAuth login
    */
-  async handleOAuthLogin(oauthUser: OAuthUser, provider: 'google' | 'facebook'): Promise<AuthResponse> {
-    // Check if user exists
+  async oauthLogin(provider: 'google' | 'facebook', oauthUser: OAuthUser): Promise<AuthResponse> {
+    // Check if user exists with OAuth provider
     let user = await userRepository.findByOAuthProvider(provider, oauthUser.id);
 
     if (!user) {
-      // Check by email
+      // Check if user exists with email
       user = await userRepository.findByEmail(oauthUser.email);
 
       if (user) {
-        // Link OAuth account to existing user
+        // Link OAuth provider to existing account
         user = await userRepository.linkOAuthProvider(user.id, provider, oauthUser.id);
       } else {
         // Create new user
-        const userId = uuidv4();
         user = await userRepository.create({
-          id: userId,
+          id: uuidv4(),
           email: oauthUser.email,
           password: null,
           first_name: oauthUser.first_name,
           last_name: oauthUser.last_name,
           role: 'customer',
-          is_email_verified: true, // OAuth emails are verified
+          is_email_verified: true, // OAuth emails are pre-verified
           oauth_provider: provider,
           oauth_provider_id: oauthUser.id,
         });
@@ -169,10 +148,8 @@ export class AuthService {
     await userRepository.updateLastLogin(user.id);
 
     // Generate tokens
-    const tokens = await tokenService.generateTokenPair(user);
-
-    // Store refresh token
-    await tokenService.storeRefreshToken(user.id, tokens.refresh_token);
+    const accessToken = await tokenService.generateAccessToken(user);
+    const refreshToken = await tokenService.generateRefreshToken(user);
 
     return {
       user: {
@@ -183,7 +160,11 @@ export class AuthService {
         role: user.role,
         is_email_verified: user.is_email_verified,
       },
-      tokens,
+      tokens: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 900,
+      },
     };
   }
 }

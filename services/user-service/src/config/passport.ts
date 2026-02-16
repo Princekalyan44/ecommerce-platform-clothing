@@ -13,7 +13,7 @@ if (config.oauth.google.clientId && config.oauth.google.clientSecret) {
         clientSecret: config.oauth.google.clientSecret,
         callbackURL: config.oauth.google.callbackURL,
       },
-      (accessToken, refreshToken, profile, done) => {
+      (_accessToken, _refreshToken, profile, done) => {
         const user: OAuthUser = {
           id: profile.id,
           email: profile.emails?.[0]?.value || '',
@@ -36,7 +36,7 @@ if (config.oauth.facebook.clientId && config.oauth.facebook.clientSecret) {
         callbackURL: config.oauth.facebook.callbackURL,
         profileFields: ['id', 'emails', 'name'],
       },
-      (accessToken, refreshToken, profile, done) => {
+      (_accessToken, _refreshToken, profile, done) => {
         const user: OAuthUser = {
           id: profile.id,
           email: profile.emails?.[0]?.value || '',

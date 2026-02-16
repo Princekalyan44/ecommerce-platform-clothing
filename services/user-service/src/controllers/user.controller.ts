@@ -10,7 +10,7 @@ export class UserController {
   /**
    * Get current user profile
    */
-  async getProfile(req: Request, res: Response, next: NextFunction) {
+  async getProfile(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = (req as any).user.user_id;
       const user = await userService.getUserProfile(userId);
@@ -27,17 +27,18 @@ export class UserController {
   /**
    * Update current user profile
    */
-  async updateProfile(req: Request, res: Response, next: NextFunction) {
+  async updateProfile(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = (req as any).user.user_id;
 
       // Validate input
       const { error, value } = validateUpdateProfile(req.body);
       if (error) {
-        return res.status(400).json({
+        res.status(400).json({
           success: false,
           error: error.details[0].message,
         });
+        return;
       }
 
       // Sanitize inputs
@@ -63,7 +64,7 @@ export class UserController {
   /**
    * Delete current user account
    */
-  async deleteAccount(req: Request, res: Response, next: NextFunction) {
+  async deleteAccount(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = (req as any).user.user_id;
       await userService.deleteUser(userId);
@@ -82,16 +83,17 @@ export class UserController {
   /**
    * Change password
    */
-  async changePassword(req: Request, res: Response, next: NextFunction) {
+  async changePassword(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = (req as any).user.user_id;
 
       const { error, value } = validateChangePassword(req.body);
       if (error) {
-        return res.status(400).json({
+        res.status(400).json({
           success: false,
           error: error.details[0].message,
         });
+        return;
       }
 
       await userService.changePassword(
@@ -108,10 +110,11 @@ export class UserController {
       });
     } catch (error: any) {
       if (error.message === 'Invalid current password') {
-        return res.status(401).json({
+        res.status(401).json({
           success: false,
           error: 'Current password is incorrect',
         });
+        return;
       }
       next(error);
     }
@@ -120,7 +123,7 @@ export class UserController {
   /**
    * Get user by ID (admin)
    */
-  async getUserById(req: Request, res: Response, next: NextFunction) {
+  async getUserById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
       const user = await userService.getUserProfile(id);
@@ -137,7 +140,7 @@ export class UserController {
   /**
    * List all users (admin)
    */
-  async listUsers(req: Request, res: Response, next: NextFunction) {
+  async listUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;

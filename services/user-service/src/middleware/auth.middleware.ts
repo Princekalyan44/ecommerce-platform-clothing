@@ -1,67 +1,67 @@
 import { Request, Response, NextFunction } from 'express';
-import { TokenService } from '../services/token.service';
-import { logger } from '../utils/logger';
-
-const tokenService = new TokenService();
+import jwt from 'jsonwebtoken';
+import { config } from '../config';
+import { TokenPayload } from '../types';
 
 /**
- * Authentication middleware
- * Verifies JWT token and attaches user to request
+ * Authenticate JWT token
  */
-export const authenticateToken = async (
+export const authenticateToken = (
   req: Request,
   res: Response,
   next: NextFunction
-) => {
+): void => {
   try {
-    // Get token from header
     const authHeader = req.headers.authorization;
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
-      return res.status(401).json({
+      res.status(401).json({
         success: false,
         error: 'Access token is required',
       });
+      return;
     }
 
-    // Verify token
-    const payload = await tokenService.verifyAccessToken(token);
-
-    // Attach user to request
-    (req as any).user = payload;
-
+    const decoded = jwt.verify(token, config.jwt.accessSecret) as TokenPayload;
+    (req as any).user = decoded;
     next();
   } catch (error: any) {
-    logger.error('Authentication failed', { error: error.message });
-
-    return res.status(401).json({
+    if (error.name === 'TokenExpiredError') {
+      res.status(401).json({
+        success: false,
+        error: 'Token expired',
+      });
+      return;
+    }
+    res.status(403).json({
       success: false,
-      error: 'Invalid or expired access token',
+      error: 'Invalid token',
     });
   }
 };
 
 /**
- * Authorization middleware
- * Checks if user has required role
+ * Authorize user role
  */
 export const authorize = (...roles: string[]) => {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return (req: Request, res: Response, next: NextFunction): void => {
     const user = (req as any).user;
 
     if (!user) {
-      return res.status(401).json({
+      res.status(401).json({
         success: false,
         error: 'Unauthorized',
       });
+      return;
     }
 
     if (!roles.includes(user.role)) {
-      return res.status(403).json({
+      res.status(403).json({
         success: false,
         error: 'Forbidden: Insufficient permissions',
       });
+      return;
     }
 
     next();
